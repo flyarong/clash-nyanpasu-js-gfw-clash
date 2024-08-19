@@ -14,6 +14,7 @@ use tempfile::TempDir;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum UpdaterState {
     #[default]
     Idle,
@@ -132,7 +133,7 @@ impl UpdaterBuilder {
                 .build()?,
         );
         Ok(Updater {
-            id: rand::random(),
+            id: rand::random::<u32>() as usize,
             temp_dir,
             core_type,
             inner: parking_lot::RwLock::new(inner),
@@ -208,7 +209,6 @@ impl Updater {
         let current_core = crate::config::Config::verge()
             .latest()
             .clash_core
-            .clone()
             .unwrap_or_default();
         if current_core == self.core_type {
             CoreManager::global().stop_core().await?;

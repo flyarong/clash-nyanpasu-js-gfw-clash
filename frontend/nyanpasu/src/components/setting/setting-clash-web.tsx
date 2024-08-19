@@ -30,7 +30,7 @@ export const SettingClashWeb = () => {
       port,
       secret: getClashInfo.data?.secret,
     };
-  }, [getClashInfo.data, getClashInfo.data?.server]);
+  }, [getClashInfo.data]);
 
   const [open, setOpen] = useState(false);
 
@@ -47,7 +47,7 @@ export const SettingClashWeb = () => {
   };
 
   const updateItem = () => {
-    const list = nyanpasuConfig?.web_ui_list || [];
+    const list = [...(nyanpasuConfig?.web_ui_list || [])];
 
     if (!list) return;
 
@@ -113,7 +113,7 @@ export const SettingClashWeb = () => {
         }}
         ok="Submit"
         close="Close"
-        contentSx={{ overflow: editString ? "auto" : "hidden" }}
+        contentStyle={{ overflow: editString ? "auto" : "hidden" }}
         divider
       >
         <Box display="flex" flexDirection="column" gap={1}>

@@ -1,4 +1,7 @@
 import path from "node:path";
+import AutoImport from "unplugin-auto-import/vite";
+import IconsResolver from "unplugin-icons/resolver";
+import Icons from "unplugin-icons/vite";
 import { defineConfig } from "vite";
 import monaco from "vite-plugin-monaco-editor";
 import sassDts from "vite-plugin-sass-dts";
@@ -7,6 +10,8 @@ import tsconfigPaths from "vite-tsconfig-paths";
 import generouted from "@generouted/react-router/plugin";
 // import react from "@vitejs/plugin-react";
 import react from "@vitejs/plugin-react-swc";
+
+const __dirname = path.dirname(new URL(import.meta.url).pathname);
 
 const devtools = () => {
   return {
@@ -50,13 +55,31 @@ export default defineConfig(({ command }) => {
         //   plugins: ["@emotion/babel-plugin"],
         // },
       }),
+      AutoImport({
+        resolvers: [
+          IconsResolver({
+            prefix: "Icon",
+            extension: "jsx",
+          }),
+        ],
+      }),
+      Icons({
+        compiler: "jsx", // or 'solid'
+      }),
       generouted(),
       sassDts({ esmExport: true }),
       monaco({ languageWorkers: ["editorWorkerService", "typescript"] }),
       isDev && devtools(),
     ],
+    resolve: {
+      alias: {
+        "@nyanpasu/ui": path.resolve("../ui/src"),
+        "@nyanpasu/interface": path.resolve("../interface/src"),
+      },
+    },
     optimizeDeps: {
-      include: ["@emotion/styled", "@mui/lab/*", "@mui/material/*"],
+      entries: ["./src/pages/**/*.tsx", "./src/main.tsx"],
+      include: ["@emotion/styled"],
     },
     esbuild: {
       drop: isDev ? undefined : ["console", "debugger"],

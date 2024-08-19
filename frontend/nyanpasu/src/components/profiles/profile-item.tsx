@@ -1,9 +1,10 @@
-import { useLockFn, useSetState } from "ahooks";
+import { useLockFn, useMemoizedFn, useSetState } from "ahooks";
+import clsx from "clsx";
 import dayjs from "dayjs";
-import { motion } from "framer-motion";
-import { memo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useMessage } from "@/hooks/use-notification";
+import { message } from "@/utils/notification";
 import parseTraffic from "@/utils/parse-traffic";
 import {
   FiberManualRecord,
@@ -16,6 +17,7 @@ import {
 import LoadingButton from "@mui/lab/LoadingButton";
 import {
   alpha,
+  Badge,
   Button,
   Chip,
   LinearProgress,
@@ -32,6 +34,10 @@ import { ProfileDialog } from "./profile-dialog";
 export interface ProfileItemProps {
   item: Profile.Item;
   selected?: boolean;
+  maxLogLevelTriggered?: {
+    global: undefined | "info" | "error" | "warn";
+    current: undefined | "info" | "error" | "warn";
+  };
   onClickChains: (item: Profile.Item) => void;
   chainsSelected?: boolean;
 }
@@ -41,6 +47,7 @@ export const ProfileItem = memo(function ProfileItem({
   selected,
   onClickChains,
   chainsSelected,
+  maxLogLevelTriggered,
 }: ProfileItemProps) {
   const { t } = useTranslation();
 
@@ -107,10 +114,18 @@ export const ProfileItem = memo(function ProfileItem({
 
       await deleteConnections();
     } catch (err) {
-      useMessage(`Error setting profile: \n ${JSON.stringify(err)}`, {
-        title: t("Error"),
-        type: "error",
-      });
+      const is_fetch_error = err instanceof Error && err.name === "FetchError";
+      message(
+        is_fetch_error
+          ? t("FetchError", {
+              content: t("Subscription"),
+            })
+          : `Error setting profile: \n ${err instanceof Error ? err.message : String(err)}`,
+        {
+          title: t("Error"),
+          type: "error",
+        },
+      );
     } finally {
       setLoading({ card: false });
     }
@@ -145,7 +160,7 @@ export const ProfileItem = memo(function ProfileItem({
     try {
       await deleteProfile(item.uid);
     } catch (err) {
-      useMessage(`Delete failed: \n ${JSON.stringify(err)}`, {
+      message(`Delete failed: \n ${JSON.stringify(err)}`, {
         title: t("Error"),
         type: "error",
       });
@@ -210,13 +225,26 @@ export const ProfileItem = memo(function ProfileItem({
             {selected && (
               <FiberManualRecord
                 className="top-0 mr-auto !size-3 animate-bounce"
-                sx={{ fill: palette.success.main }}
+                sx={{
+                  fill: palette.success.main,
+                }}
               />
             )}
 
-            <div className="text-sm">
-              {item.updated! > 0 ? dayjs(item.updated! * 1000).fromNow() : ""}
-            </div>
+            <TextCarousel
+              className="w-30 flex h-6 items-center"
+              nodes={[
+                !!item.updated && (
+                  <TimeSpan ts={item.updated!} k="Subscription Updated At" />
+                ),
+                !!item.extra?.expire && (
+                  <TimeSpan
+                    ts={item.extra!.expire!}
+                    k="Subscription Expires In"
+                  />
+                ),
+              ]}
+            ></TextCarousel>
           </div>
 
           <div>
@@ -224,33 +252,48 @@ export const ProfileItem = memo(function ProfileItem({
             <p className="truncate">{item.desc}</p>
           </div>
 
-          {isRemote && (
-            <div className="flex items-center justify-between gap-4">
-              <div className="w-full">
-                <LinearProgress variant="determinate" value={progress} />
-              </div>
-
-              <Tooltip title={`${parseTraffic(used)} / ${parseTraffic(total)}`}>
-                <div className="text-sm font-bold">
-                  {((used / total) * 100).toFixed(2)}%
-                </div>
-              </Tooltip>
+          <div
+            className={clsx(
+              "flex items-center justify-between gap-4",
+              !isRemote && "invisible",
+            )}
+          >
+            <div className="w-full">
+              <LinearProgress variant="determinate" value={progress} />
             </div>
-          )}
+
+            <Tooltip title={`${parseTraffic(used)} / ${parseTraffic(total)}`}>
+              <div className="text-sm font-bold">
+                {((used / total) * 100).toFixed(2)}%
+              </div>
+            </Tooltip>
+          </div>
 
           <div className="flex justify-end gap-2">
-            <Button
-              className="!mr-auto"
-              size="small"
-              variant={chainsSelected ? "contained" : "outlined"}
-              startIcon={<Terminal />}
-              onClick={(e) => {
-                cleanDeepClickEvent(e);
-                onClickChains(item);
-              }}
+            <Badge
+              variant="dot"
+              color={
+                maxLogLevelTriggered?.current === "error"
+                  ? "error"
+                  : maxLogLevelTriggered?.current === "warn"
+                    ? "warning"
+                    : "primary"
+              }
+              invisible={!selected || !maxLogLevelTriggered?.current}
             >
-              {t("Proxy Chains")}
-            </Button>
+              <Button
+                className="!mr-auto"
+                size="small"
+                variant={chainsSelected ? "contained" : "outlined"}
+                startIcon={<Terminal />}
+                onClick={(e) => {
+                  cleanDeepClickEvent(e);
+                  onClickChains(item);
+                }}
+              >
+                {t("Proxy Chains")}
+              </Button>
+            </Badge>
 
             {isRemote && (
               <Tooltip title={t("Update")}>
@@ -314,5 +357,67 @@ export const ProfileItem = memo(function ProfileItem({
     </>
   );
 });
+
+function TimeSpan({ ts, k }: { ts: number; k: string }) {
+  const time = dayjs(ts * 1000);
+  const { t } = useTranslation();
+  return (
+    <Tooltip title={time.format("YYYY/MM/DD HH:mm:ss")}>
+      <div className="animate-marquee h-fit whitespace-nowrap text-right text-sm font-medium">
+        {t(k, {
+          time: time.fromNow(),
+        })}
+      </div>
+    </Tooltip>
+  );
+}
+
+function TextCarousel(props: { nodes: React.ReactNode[]; className?: string }) {
+  const [index, setIndex] = useState(0);
+  const nodes = useMemo(
+    () => props.nodes.filter((item) => !!item),
+    [props.nodes],
+  );
+
+  const nextNode = useMemoizedFn(() => {
+    setIndex((i) => (i + 1) % nodes.length);
+  });
+
+  useEffect(() => {
+    if (nodes.length <= 1) {
+      return;
+    }
+    const timer = setInterval(() => {
+      nextNode();
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [index, nextNode, nodes.length]);
+  if (nodes.length === 0) {
+    return null;
+  }
+  return (
+    <div
+      className={cn("overflow-hidden", props.className)}
+      onClick={() => nextNode()}
+    >
+      <AnimatePresence mode="wait">
+        {nodes.map(
+          (node, i) =>
+            i == index && (
+              <motion.div
+                className="h-full w-full"
+                key={index}
+                initial={{ y: 40, opacity: 0, scale: 0.8 }}
+                animate={{ y: 0, opacity: 1, scale: 1 }}
+                exit={{ y: -40, opacity: 0, scale: 0.8 }}
+              >
+                {node}
+              </motion.div>
+            ),
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 export default ProfileItem;

@@ -1,6 +1,6 @@
 import { version } from "~/package.json";
 import { useAsyncEffect, useReactive } from "ahooks";
-import { useRef, useState } from "react";
+import { createContext, use, useEffect, useRef, useState } from "react";
 import {
   Controller,
   SelectElement,
@@ -22,6 +22,16 @@ export interface ProfileDialogProps {
   onClose: () => void;
 }
 
+export type AddProfileContextValue = {
+  name: string | null;
+  desc: string | null;
+  url: string;
+};
+
+export const AddProfileContext = createContext<AddProfileContextValue | null>(
+  null,
+);
+
 export const ProfileDialog = ({
   profile,
   open,
@@ -33,22 +43,31 @@ export const ProfileDialog = ({
     useClash();
 
   const localProfile = useRef("");
-
+  const addProfileCtx = use(AddProfileContext);
   const [localProfileMessage, setLocalProfileMessage] = useState("");
 
-  const { control, watch, handleSubmit, reset } = useForm<Profile.Item>({
-    defaultValues: profile || {
-      type: "remote",
-      name: `New Profile`,
-      desc: "",
-      url: "",
-      option: {
-        // user_agent: "",
-        with_proxy: false,
-        self_proxy: false,
+  const { control, watch, handleSubmit, reset, setValue } =
+    useForm<Profile.Item>({
+      defaultValues: profile || {
+        type: "remote",
+        name: addProfileCtx?.name || `New Profile`,
+        desc: addProfileCtx?.desc || "",
+        url: addProfileCtx?.url || "",
+        option: {
+          // user_agent: "",
+          with_proxy: false,
+          self_proxy: false,
+        },
       },
-    },
-  });
+    });
+
+  useEffect(() => {
+    if (addProfileCtx) {
+      setValue("url", addProfileCtx.url);
+      if (addProfileCtx.desc) setValue("desc", addProfileCtx.desc);
+      if (addProfileCtx.name) setValue("name", addProfileCtx.name);
+    }
+  }, [addProfileCtx, setValue]);
 
   const isRemote = watch("type") === "remote";
 
@@ -74,19 +93,16 @@ export const ProfileDialog = ({
         if (localProfile.current) {
           await createProfile(form, localProfile.current);
         } else {
-          setLocalProfileMessage("Not selected profile");
-
-          return;
+          // setLocalProfileMessage("Not selected profile");
+          await createProfile(form, "rules: []");
         }
       }
     };
 
     const toUpdate = async () => {
-      await setProfiles(form.uid, form);
-
       const value = profileMonacoViewRef.current?.getValue() || "";
-
       await setProfileFile(form.uid, value);
+      await setProfiles(form.uid, form);
     };
 
     try {
@@ -156,6 +172,7 @@ export const ProfileDialog = ({
         control={control}
         {...commonProps}
         size="small"
+        multiline
       />
 
       {isRemote ? (
@@ -226,6 +243,9 @@ export const ProfileDialog = ({
             {localProfileMessage && (
               <div className="ml-2 text-red-500">{localProfileMessage}</div>
             )}
+            <span className="px-2 text-xs">
+              * {t("Select file to import or leave blank to touch new one.")}
+            </span>
           </>
         )
       )}

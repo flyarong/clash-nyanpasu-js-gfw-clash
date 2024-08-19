@@ -7,15 +7,15 @@ mod utils;
 
 pub use self::chain::ScriptType;
 use self::{chain::*, field::*, merge::*, script::*, tun::*};
-use crate::config::Config;
+use crate::config::{nyanpasu::ClashCore, Config};
+use indexmap::IndexMap;
 use serde_yaml::Mapping;
-use std::collections::{HashMap, HashSet};
-
-type ResultLog = Vec<(String, String)>;
+use std::collections::HashSet;
+pub use utils::{Logs, LogsExt};
 
 /// Enhance mode
 /// 返回最终配置、该配置包含的键、和script执行的结果
-pub fn enhance() -> (Mapping, Vec<String>, HashMap<String, ResultLog>) {
+pub async fn enhance() -> (Mapping, Vec<String>, IndexMap<String, Logs>) {
     // config.yaml 的配置
     let clash_config = { Config::clash().latest().0.clone() };
 
@@ -23,7 +23,7 @@ pub fn enhance() -> (Mapping, Vec<String>, HashMap<String, ResultLog>) {
         let verge = Config::verge();
         let verge = verge.latest();
         (
-            verge.clash_core.clone(),
+            verge.clash_core,
             verge.enable_tun_mode.unwrap_or(false),
             verge.enable_builtin_enhanced.unwrap_or(true),
             verge.enable_clash_fields.unwrap_or(true),
@@ -62,34 +62,45 @@ pub fn enhance() -> (Mapping, Vec<String>, HashMap<String, ResultLog>) {
         (current_mapping, profile_spec_chains, valid)
     };
 
-    let mut result_map = HashMap::new(); // 保存脚本日志
+    let mut result_map = IndexMap::new(); // 保存脚本日志
     let mut exists_keys = use_keys(&config); // 保存出现过的keys
 
     let valid = use_valid_fields(valid);
     config = use_filter(config, &valid, enable_filter);
 
     // 处理用户的profile
-    chains.into_iter().for_each(|item| match item.data {
-        ChainTypeWrapper::Merge(merge) => {
-            exists_keys.extend(use_keys(&merge));
-            config = use_merge(merge, config.to_owned());
-            config = use_filter(config.to_owned(), &valid, enable_filter);
-        }
-        ChainTypeWrapper::Script(script) => {
-            let mut logs = vec![];
-
-            match use_script(script, config.to_owned()) {
-                Ok((res_config, res_logs)) => {
-                    exists_keys.extend(use_keys(&res_config));
-                    config = use_filter(res_config, &valid, enable_filter);
-                    logs.extend(res_logs);
-                }
-                Err(err) => logs.push(("exception".into(), err.to_string())),
+    let mut script_runner = RunnerManager::new();
+    for item in chains.into_iter() {
+        // TODO: 想一个更好的办法，避免内存拷贝
+        match item.data {
+            ChainTypeWrapper::Merge(merge) => {
+                let mut logs = vec![];
+                exists_keys.extend(use_keys(&merge));
+                let (res, process_logs) = use_merge(merge, config.to_owned());
+                config = res.unwrap();
+                config = use_filter(config.to_owned(), &valid, enable_filter);
+                logs.extend(process_logs);
+                result_map.insert(item.uid, logs);
             }
-
-            result_map.insert(item.uid, logs);
+            ChainTypeWrapper::Script(script) => {
+                let mut logs = vec![];
+                let (res, process_logs) = script_runner
+                    .process_script(script, config.to_owned())
+                    .await;
+                logs.extend(process_logs);
+                // TODO: 修改日记 level 格式？
+                match res {
+                    Ok(res_config) => {
+                        exists_keys.extend(use_keys(&res_config));
+                        config = use_filter(res_config, &valid, enable_filter);
+                    }
+                    Err(err) => logs.error(err.to_string()),
+                }
+                // TODO: 这里添加对 field 的检查，触发 WARN 日记。此外，需要对 Merge 的结果进行检查？
+                result_map.insert(item.uid, logs);
+            }
         }
-    });
+    }
 
     // 合并默认的config
     clash_config
@@ -104,24 +115,27 @@ pub fn enhance() -> (Mapping, Vec<String>, HashMap<String, ResultLog>) {
 
     // 内建脚本最后跑
     if enable_builtin {
-        ChainItem::builtin()
+        for item in ChainItem::builtin()
             .into_iter()
-            .filter(|(s, _)| s.is_support(clash_core.as_ref()))
+            .filter(|(s, _)| s.contains(*clash_core.as_ref().unwrap_or(&ClashCore::default())))
             .map(|(_, c)| c)
-            .for_each(|item| {
-                log::debug!(target: "app", "run builtin script {}", item.uid);
+        {
+            log::debug!(target: "app", "run builtin script {}", item.uid);
 
-                if let ChainTypeWrapper::Script(script) = item.data {
-                    match use_script(script, config.to_owned()) {
-                        Ok((res_config, _)) => {
-                            config = use_filter(res_config, &clash_fields, enable_filter);
-                        }
-                        Err(err) => {
-                            log::error!(target: "app", "builtin script error `{err}`");
-                        }
+            if let ChainTypeWrapper::Script(script) = item.data {
+                let (res, _) = script_runner
+                    .process_script(script, config.to_owned())
+                    .await;
+                match res {
+                    Ok(res_config) => {
+                        config = use_filter(res_config, &clash_fields, enable_filter);
+                    }
+                    Err(err) => {
+                        log::error!(target: "app", "builtin script error `{err}`");
                     }
                 }
-            });
+            }
+        }
     }
 
     config = use_filter(config, &clash_fields, enable_filter);

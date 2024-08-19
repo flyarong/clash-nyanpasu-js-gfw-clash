@@ -1,36 +1,64 @@
 import { useDebounceEffect } from "ahooks";
-import { useRef } from "react";
-import { VList, VListHandle } from "virtua";
-import { LogMessage } from "@nyanpasu/interface";
+import { useAtomValue } from "jotai";
+import { RefObject, useEffect, useRef } from "react";
+import { Virtualizer, VListHandle } from "virtua";
+import ContentDisplay from "../base/content-display";
 import LogItem from "./log-item";
+import { atomLogLevel, atomLogList } from "./modules/store";
 
-export const LogList = ({ data }: { data: LogMessage[] }) => {
-  const vListRef = useRef<VListHandle>(null);
+export const LogList = ({
+  scrollRef,
+}: {
+  scrollRef: RefObject<HTMLElement>;
+}) => {
+  const logData = useAtomValue(atomLogList);
+
+  const virtualizerRef = useRef<VListHandle>(null);
 
   const shouldStickToBottom = useRef(true);
 
+  const isFristScroll = useRef(true);
+
   useDebounceEffect(
     () => {
-      if (shouldStickToBottom.current) {
-        vListRef.current?.scrollToIndex(data.length - 1, {
+      if (shouldStickToBottom && logData.length) {
+        virtualizerRef.current?.scrollToIndex(logData.length - 1, {
           align: "end",
-          smooth: true,
+          smooth: !isFristScroll.current,
         });
+
+        isFristScroll.current = false;
       }
     },
-    [data],
+    [logData],
     { wait: 100 },
   );
 
-  return (
-    <VList
-      ref={vListRef}
-      className="flex min-h-full select-text flex-col gap-2 overflow-auto p-2"
-      reverse
+  const logLevel = useAtomValue(atomLogLevel);
+
+  useEffect(() => {
+    isFristScroll.current = true;
+  }, [logLevel]);
+
+  const handleRangeChange = (_start: number, end: number) => {
+    if (end + 1 === logData.length) {
+      shouldStickToBottom.current = true;
+    } else {
+      shouldStickToBottom.current = false;
+    }
+  };
+
+  return logData.length ? (
+    <Virtualizer
+      ref={virtualizerRef}
+      scrollRef={scrollRef}
+      onRangeChange={handleRangeChange}
     >
-      {data.map((item, index) => {
+      {logData.map((item, index) => {
         return <LogItem key={index} value={item} />;
       })}
-    </VList>
+    </Virtualizer>
+  ) : (
+    <ContentDisplay className="absolute" message="No logs" />
   );
 };
